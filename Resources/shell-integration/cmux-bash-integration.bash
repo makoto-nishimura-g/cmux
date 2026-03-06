@@ -164,6 +164,14 @@ _cmux_prompt_command() {
         } >/dev/null 2>&1 & disown
     fi
 
+    # CMUX_DISABLE_GIT=1 で git/PR プローブを完全にスキップ
+    if [[ "${CMUX_DISABLE_GIT:-}" == "1" ]]; then
+        if (( now - _CMUX_PORTS_LAST_RUN >= 10 )); then
+            _cmux_ports_kick
+        fi
+        return 0
+    fi
+
     # Branch can change via aliases/tools while an older probe is still in flight.
     # Track .git/HEAD content so we can restart stale probes immediately.
     local git_head_changed=0
@@ -202,9 +210,10 @@ _cmux_prompt_command() {
             local branch dirty_opt=""
             branch=$(git branch --show-current 2>/dev/null)
             if [[ -n "$branch" ]]; then
-                local first
-                first=$(git status --porcelain -uno 2>/dev/null | head -1)
-                [[ -n "$first" ]] && dirty_opt="--status=dirty"
+                # git diff-index はインデックスロックを取らないため、index.lock 競合を回避
+                if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+                    dirty_opt="--status=dirty"
+                fi
                 _cmux_send "report_git_branch $branch $dirty_opt --tab=$CMUX_TAB_ID --panel=$CMUX_PANEL_ID"
             else
                 _cmux_send "clear_git_branch --tab=$CMUX_TAB_ID --panel=$CMUX_PANEL_ID"
