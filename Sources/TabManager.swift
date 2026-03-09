@@ -1588,6 +1588,10 @@ class TabManager: ObservableObject {
     /// This should never prompt: the process is already gone, and Ghostty emits the
     /// `SHOW_CHILD_EXITED` action specifically so the host app can decide what to do.
     func closePanelAfterChildExited(tabId: UUID, surfaceId: UUID) {
+        // グレースフルシャットダウン中はパネル自動クローズを抑制
+        // (セッション状態は既に保存済み)
+        if AppDelegate.shared?.isTerminatingApp == true { return }
+
         guard let tab = tabs.first(where: { $0.id == tabId }) else { return }
         guard tab.panels[surfaceId] != nil else { return }
 

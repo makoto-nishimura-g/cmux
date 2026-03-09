@@ -1568,7 +1568,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var lastSessionAutosaveFingerprint: Int?
     private var lastSessionAutosavePersistedAt: Date = .distantPast
     private var didHandleExplicitOpenIntentAtStartup = false
-    private var isTerminatingApp = false
+    private(set) var isTerminatingApp = false
     private var didInstallLifecycleSnapshotObservers = false
     private var didDisableSuddenTermination = false
     private var commandPaletteVisibilityByWindowId: [UUID: Bool] = [:]
@@ -1825,12 +1825,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         isTerminatingApp = true
         _ = saveSessionSnapshot(includeScrollback: true, removeWhenEmpty: false)
-        return .terminateNow
+
+        // 全ウィンドウの全ターミナルサーフェスを収集
+        var surfaces: [TerminalSurface] = []
+        for context in mainWindowContexts.values {
+            for workspace in context.tabManager.tabs {
+                for (_, panel) in workspace.panels {
+                    if let terminal = panel as? TerminalPanel {
+                        surfaces.append(terminal.surface)
+                    }
+                }
+            }
+        }
+
+        // ターミナルがなければ即座に終了
+        guard !surfaces.isEmpty else { return .terminateNow }
+
+        // 同期的に全サーフェスをteardown (SIGHUP送信)
+        for surface in surfaces {
+            surface.teardownSurfaceSync()
+        }
+
+        // 子プロセスにクリーンアップ猶予を与えてから終了通知
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        isTerminatingApp = true
-        _ = saveSessionSnapshot(includeScrollback: true, removeWhenEmpty: false)
+        // セッションスナップショットは applicationShouldTerminate で保存済み
         stopSessionAutosaveTimer()
         stopSocketListenerHealthMonitor()
         TerminalController.shared.stop()

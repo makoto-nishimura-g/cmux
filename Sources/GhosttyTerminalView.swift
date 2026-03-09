@@ -2192,6 +2192,28 @@ final class TerminalSurface: Identifiable, ObservableObject {
         }
     }
 
+    /// グレースフルシャットダウン用: 同期的にサーフェスを解放しSIGHUPを送信する。
+    /// applicationShouldTerminate のコンテキストでのみ使用すること。
+    @MainActor
+    func teardownSurfaceSync() {
+        markPortalLifecycleClosed(reason: "gracefulQuit")
+
+        let callbackContext = surfaceCallbackContext
+        surfaceCallbackContext = nil
+
+        let surfaceToFree = surface
+        surface = nil
+
+        guard let surfaceToFree else {
+            callbackContext?.release()
+            return
+        }
+
+        // 同期的に free を呼び出す (IOスレッド join + PTYクローズ → SIGHUP送信)
+        ghostty_surface_free(surfaceToFree)
+        callbackContext?.release()
+    }
+
     #if DEBUG
     private static let surfaceLogPath = "/tmp/cmux-ghostty-surface.log"
     private static let sizeLogPath = "/tmp/cmux-ghostty-size.log"
