@@ -7786,7 +7786,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard shortcutKey.count == 1, let scalar = shortcutKey.unicodeScalars.first else {
             return false
         }
+        // アルファベットに加えて、ブラケットも文字マッチ必須にする。
+        // JISキーボードでは [] の物理キー位置がUSと異なるため、
+        // ANSI keyCodeフォールバックで誤マッチが発生する。
         return CharacterSet.letters.contains(scalar)
+            || CharacterSet(charactersIn: "[]").contains(scalar)
     }
 
     private func shortcutCharacterMatches(
