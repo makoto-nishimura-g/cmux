@@ -3973,6 +3973,15 @@ extension Workspace: BonsplitDelegate {
             return true
         }
 
+        // UserDefaultsでタブ閉じ確認ダイアログを無効化（デフォルト: 確認あり）
+        // defaults write com.cmuxterm.app cmuxConfirmCloseSurface -bool false で無効化可能
+        if !UserDefaults.standard.bool(forKey: "cmuxConfirmCloseSurface"),
+           UserDefaults.standard.object(forKey: "cmuxConfirmCloseSurface") != nil {
+            stageClosedBrowserRestoreSnapshotIfNeeded(for: tab, inPane: pane)
+            recordPostCloseSelection()
+            return true
+        }
+
         // If confirmation is required, Bonsplit will call into this delegate and we must return false.
         // Show an app-level confirmation, then re-attempt the close with forceCloseTabIds to bypass
         // this gating on the second pass.

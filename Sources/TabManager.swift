@@ -1454,11 +1454,15 @@ class TabManager: ObservableObject {
         // Cmd+W closes the focused Bonsplit tab (a "tab" in the UI). When the workspace only has
         // a single tab left, closing it should close the workspace (and possibly the window),
         // rather than creating a replacement terminal.
+        // cmuxConfirmCloseSurface が false なら確認スキップ
+        let confirmDisabled = UserDefaults.standard.object(forKey: "cmuxConfirmCloseSurface") != nil
+            && !UserDefaults.standard.bool(forKey: "cmuxConfirmCloseSurface")
+
         let effectiveSurfaceCount = max(tab.panels.count, bonsplitTabCount)
         let isLastTabInWorkspace = effectiveSurfaceCount <= 1
         if isLastTabInWorkspace {
             let willCloseWindow = tabs.count <= 1
-            let needsConfirm = workspaceNeedsConfirmClose(tab)
+            let needsConfirm = !confirmDisabled && workspaceNeedsConfirmClose(tab)
             if needsConfirm {
                 let message = willCloseWindow
                     ? String(localized: "dialog.closeLastTabWindow.message", defaultValue: "This will close the last tab and close the window.")
@@ -1493,7 +1497,8 @@ class TabManager: ObservableObject {
             return
         }
 
-        if let terminalPanel = tab.terminalPanel(for: panelId),
+        if !confirmDisabled,
+           let terminalPanel = tab.terminalPanel(for: panelId),
            terminalPanel.needsConfirmClose() {
 #if DEBUG
             dlog(
