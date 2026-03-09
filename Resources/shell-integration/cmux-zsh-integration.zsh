@@ -204,6 +204,12 @@ _cmux_preexec() {
             _CMUX_PR_FORCE=1 ;;
     esac
 
+    # Claude Code がフォアグラウンドで起動されたことを記録する。
+    # kill 等で stop フックが呼ばれなくても precmd でステータスをクリアできるようにする。
+    case "$cmd" in
+        claude|claude\ *) _CMUX_CLAUDE_CODE_ACTIVE=1 ;;
+    esac
+
     # Register TTY + kick batched port scan for foreground commands (servers).
     _cmux_report_tty_once
     _cmux_ports_kick
@@ -217,6 +223,15 @@ _cmux_precmd() {
     [[ -S "$CMUX_SOCKET_PATH" ]] || return 0
     [[ -n "$CMUX_TAB_ID" ]] || return 0
     [[ -n "$CMUX_PANEL_ID" ]] || return 0
+
+    # Claude Code のフォアグラウンドプロセスが終了してプロンプトに戻った場合、
+    # サイドバーの "Running" ステータスをクリアする（kill 時に stop フックが呼ばれない対策）。
+    if (( ${_CMUX_CLAUDE_CODE_ACTIVE:-0} )); then
+        _CMUX_CLAUDE_CODE_ACTIVE=0
+        {
+            _cmux_send "clear_status claude_code --tab=$CMUX_TAB_ID"
+        } >/dev/null 2>&1 &!
+    fi
 
     if [[ -z "$_CMUX_TTY_NAME" ]]; then
         local t
