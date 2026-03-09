@@ -3207,7 +3207,20 @@ final class Workspace: Identifiable, ObservableObject {
     @discardableResult
     func newTerminalSurfaceInFocusedPane(focus: Bool? = nil) -> TerminalPanel? {
         guard let focusedPaneId = bonsplitController.focusedPaneId else { return nil }
-        return newTerminalSurface(inPane: focusedPaneId, focus: focus)
+
+        // CWD継承: フォーカスされたパネルのディレクトリを新しいサーフェスに引き継ぐ
+        let inheritedCwd: String? = {
+            guard let selectedTab = bonsplitController.selectedTab(inPane: focusedPaneId),
+                  let panelId = panelIdFromSurfaceId(selectedTab.id) else { return nil }
+            return panelDirectories[panelId]
+                ?? (currentDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? nil : currentDirectory)
+        }()
+#if DEBUG
+        dlog("surface.newTab pane=\(focusedPaneId.id.uuidString.prefix(5)) cwd=\(inheritedCwd ?? "nil")")
+#endif
+
+        return newTerminalSurface(inPane: focusedPaneId, focus: focus, workingDirectory: inheritedCwd)
     }
 
     @discardableResult
