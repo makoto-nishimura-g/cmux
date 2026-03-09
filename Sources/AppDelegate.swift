@@ -1548,6 +1548,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var didPrepareStartupSessionSnapshot = false
     private var didAttemptStartupSessionRestore = false
     private var isApplyingStartupSessionRestore = false
+    /// 全ウィンドウが閉じられた後、次のウィンドウ登録時にフォールバックジオメトリを復元するためのフラグ
+    private var shouldRestoreFallbackGeometryOnNextWindow = false
     private var sessionAutosaveTimer: DispatchSourceTimer?
     private var socketListenerHealthTimer: DispatchSourceTimer?
     private var socketListenerHealthCheckInFlight = false
@@ -2907,6 +2909,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         attemptStartupSessionRestoreIfNeeded(primaryWindow: window)
+
+        // ウィンドウ閉じ後の再オープン時にフォールバックジオメトリを復元
+        if shouldRestoreFallbackGeometryOnNextWindow {
+            shouldRestoreFallbackGeometryOnNextWindow = false
+            let displays = currentDisplayGeometries()
+            let fallback = persistedWindowGeometry()
+            if let restoredFrame = Self.resolvedWindowFrame(
+                from: fallback?.frame,
+                display: fallback?.display,
+                availableDisplays: displays.available,
+                fallbackDisplay: displays.fallback
+            ) {
+                window.setFrame(restoredFrame, display: true)
+            }
+        }
+
         if !isTerminatingApp {
             _ = saveSessionSnapshot(includeScrollback: false)
         }
@@ -8290,6 +8308,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     isTerminatingApp: isTerminatingApp
                 )
             )
+        }
+
+        // 全ウィンドウが閉じられた場合、次のウィンドウ登録時にフォールバックジオメトリを復元する
+        if mainWindowContexts.isEmpty && !isTerminatingApp {
+            shouldRestoreFallbackGeometryOnNextWindow = true
         }
     }
 
