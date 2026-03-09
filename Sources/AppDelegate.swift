@@ -7772,7 +7772,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let hasEventChars = !(eventCharsIgnoringModifiers?.isEmpty ?? true)
         if hasEventChars,
            flags.contains(.command),
-           !flags.contains(.control),
            shouldRequireCharacterMatchForCommandShortcut(shortcutKey: shortcutKey) {
             return false
         }
@@ -7793,13 +7792,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // so keep ANSI keyCode fallback for control-modified shortcuts. Also allow fallback for
         // command punctuation shortcuts, since some non-US layouts report different characters
         // for the same physical key even when menu-equivalent semantics should still apply.
-        let allowANSIKeyCodeFallback = flags.contains(.control)
-            || (flags.contains(.command)
-                && !flags.contains(.control)
-                && (
-                    !shouldRequireCharacterMatchForCommandShortcut(shortcutKey: shortcutKey)
-                        || (!hasEventChars && (layoutCharacter?.isEmpty ?? true))
-                ))
+        // ただし、ブラケット等の文字マッチ必須キーは、文字情報がある場合はフォールバックしない。
+        // JISキーボードでは [] の物理キー位置がUSと異なり、keyCodeで誤マッチが発生するため。
+        let requireCharMatch = shouldRequireCharacterMatchForCommandShortcut(shortcutKey: shortcutKey)
+        let allowANSIKeyCodeFallback: Bool
+        if requireCharMatch && hasEventChars {
+            allowANSIKeyCodeFallback = false
+        } else {
+            allowANSIKeyCodeFallback = flags.contains(.control)
+                || (flags.contains(.command)
+                    && !flags.contains(.control)
+                    && (
+                        !requireCharMatch
+                            || (!hasEventChars && (layoutCharacter?.isEmpty ?? true))
+                    ))
+        }
         if allowANSIKeyCodeFallback, let expectedKeyCode = keyCodeForShortcutKey(shortcutKey) {
             return event.keyCode == expectedKeyCode
         }

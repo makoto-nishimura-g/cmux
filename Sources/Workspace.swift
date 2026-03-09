@@ -1384,6 +1384,53 @@ final class Workspace: Identifiable, ObservableObject {
         return fallbackTitle
     }
 
+    /// ホームディレクトリを `~` に短縮
+    private func shortenedDirectory(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        if path == home {
+            return "~"
+        }
+        if path.hasPrefix(home + "/") {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
+    }
+
+    /// タイトルが汎用的か判定（"Terminal" など）
+    private static let genericTitles: Set<String> = ["Terminal"]
+
+    /// パネルのタイトルとサブタイトルを解決しbonsplitに同期
+    private func syncTabTitleAndSubtitle(panelId: UUID) {
+        guard let tabId = surfaceIdFromPanelId(panelId) else { return }
+        let processTitle = panelTitles[panelId] ?? panels[panelId]?.displayTitle ?? "Tab"
+        let resolvedTitle = resolvedPanelTitle(panelId: panelId, fallback: processTitle)
+        let directory = panelDirectories[panelId]
+        let shortDir = directory.map { shortenedDirectory($0) }
+
+        let isGeneric = Self.genericTitles.contains(processTitle)
+        // カスタムタイトルの場合は汎用扱いしない
+        let hasCustom = panelCustomTitles[panelId] != nil
+
+        let finalTitle: String
+        let finalSubtitle: String?
+
+        if isGeneric && !hasCustom, let dir = shortDir {
+            // 汎用タイトルの場合、CWDをメインタイトルにする
+            finalTitle = dir
+            finalSubtitle = nil
+        } else {
+            finalTitle = resolvedTitle
+            finalSubtitle = shortDir
+        }
+
+        bonsplitController.updateTab(
+            tabId,
+            title: finalTitle,
+            subtitle: finalSubtitle,
+            hasCustomTitle: hasCustom
+        )
+    }
+
     private func syncPinnedStateForTab(_ tabId: TabID, panelId: UUID) {
         let isPinned = pinnedPanelIds.contains(panelId)
         if let panel = panels[panelId] {
@@ -1593,12 +1640,17 @@ final class Workspace: Identifiable, ObservableObject {
     func updatePanelDirectory(panelId: UUID, directory: String) {
         let trimmed = directory.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        if panelDirectories[panelId] != trimmed {
+        let changed = panelDirectories[panelId] != trimmed
+        if changed {
             panelDirectories[panelId] = trimmed
         }
         // Update current directory if this is the focused panel
         if panelId == focusedPanelId, currentDirectory != trimmed {
             currentDirectory = trimmed
+        }
+        // タブのサブタイトルにCWDを反映
+        if changed {
+            syncTabTitleAndSubtitle(panelId: panelId)
         }
     }
 
@@ -1655,17 +1707,9 @@ final class Workspace: Identifiable, ObservableObject {
             didMutate = true
         }
 
-        // Update bonsplit tab title only when this panel's title changed.
-        if didMutate,
-           let tabId = surfaceIdFromPanelId(panelId),
-           let panel = panels[panelId] {
-            let baseTitle = panelTitles[panelId] ?? panel.displayTitle
-            let resolvedTitle = resolvedPanelTitle(panelId: panelId, fallback: baseTitle)
-            bonsplitController.updateTab(
-                tabId,
-                title: resolvedTitle,
-                hasCustomTitle: panelCustomTitles[panelId] != nil
-            )
+        // タイトル変更時にCWDサブタイトルも含めて同期
+        if didMutate {
+            syncTabTitleAndSubtitle(panelId: panelId)
         }
 
         // If this is the only panel and no custom title, update workspace title
