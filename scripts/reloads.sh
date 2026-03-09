@@ -210,6 +210,10 @@ if [[ -f "$INFO_PLIST" ]]; then
 fi
 APP_PATH="$STAGING_APP_PATH"
 
+# UserDefaultsのバックアップ（再署名で設定が消えるのを防ぐ）
+PREFS_BACKUP="/tmp/cmux-staging-prefs-backup.plist"
+defaults export "$BUNDLE_ID" "$PREFS_BACKUP" 2>/dev/null || true
+
 # Ensure any running instance is fully terminated, regardless of DerivedData path.
 /usr/bin/osascript -e "tell application id \"${BUNDLE_ID}\" to quit" >/dev/null 2>&1 || true
 sleep 0.3
@@ -252,6 +256,11 @@ OPEN_CLEAN_ENV=(
 # Always inject staging socket paths via env to ensure they take effect
 # (LSEnvironment requires app restart to pick up plist changes).
 "${OPEN_CLEAN_ENV[@]}" CMUX_SOCKET_PATH="$CMUX_SOCKET" CMUXD_UNIX_PATH="$CMUXD_SOCKET" open -g "$APP_PATH"
+
+# UserDefaultsのリストア（バックアップがあれば復元）
+if [[ -f "$PREFS_BACKUP" ]]; then
+  defaults import "$BUNDLE_ID" "$PREFS_BACKUP" 2>/dev/null || true
+fi
 
 # Safety: ensure only one instance is running.
 sleep 0.2
