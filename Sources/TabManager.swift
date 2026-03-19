@@ -1462,7 +1462,8 @@ class TabManager: ObservableObject {
         let isLastTabInWorkspace = effectiveSurfaceCount <= 1
         if isLastTabInWorkspace {
             let willCloseWindow = tabs.count <= 1
-            let needsConfirm = !confirmDisabled && workspaceNeedsConfirmClose(tab)
+            // ワークスペース閉鎖に繋がるため、confirmDisabled でも確認ダイアログを出す
+            let needsConfirm = workspaceNeedsConfirmClose(tab)
             if needsConfirm {
                 let message = willCloseWindow
                     ? String(localized: "dialog.closeLastTabWindow.message", defaultValue: "This will close the last tab and close the window.")
