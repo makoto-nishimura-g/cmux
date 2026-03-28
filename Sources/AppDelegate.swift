@@ -8259,6 +8259,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Keep geometry available as a fallback even if the full session snapshot
         // is removed when the last window closes.
         persistWindowGeometry(from: window)
+
+        // 最後のウィンドウを閉じる場合、コンテキスト削除前にスナップショットを保存する。
+        // コンテキスト削除後では buildSessionSnapshot が nil を返してしまい、
+        // removeWhenEmpty=true によりセッションファイルが削除されてしまうため。
+        let isLastWindow = mainWindowContexts.count == 1
+            && mainWindowContexts[ObjectIdentifier(window)] != nil
+        if isLastWindow,
+           !isTerminatingApp,
+           Self.shouldPersistSnapshotOnWindowUnregister(isTerminatingApp: isTerminatingApp) {
+            _ = saveSessionSnapshot(includeScrollback: false)
+        }
+
         guard let removed = unregisterMainWindowContext(for: window) else { return }
         commandPaletteVisibilityByWindowId.removeValue(forKey: removed.windowId)
         commandPalettePendingOpenByWindowId.removeValue(forKey: removed.windowId)
@@ -8301,12 +8313,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // During app termination we already persisted a full snapshot (with scrollback)
         // in applicationShouldTerminate/applicationWillTerminate. Saving again here would
         // overwrite it as windows tear down one-by-one, dropping closed windows and replay.
-        if Self.shouldPersistSnapshotOnWindowUnregister(isTerminatingApp: isTerminatingApp) {
+        // 最後のウィンドウの場合はコンテキスト削除前に既に保存済みなのでスキップする。
+        if !isLastWindow,
+           Self.shouldPersistSnapshotOnWindowUnregister(isTerminatingApp: isTerminatingApp) {
             _ = saveSessionSnapshot(
                 includeScrollback: false,
-                removeWhenEmpty: Self.shouldRemoveSnapshotWhenNoWindowsRemainOnWindowUnregister(
-                    isTerminatingApp: isTerminatingApp
-                )
+                removeWhenEmpty: false
             )
         }
 
