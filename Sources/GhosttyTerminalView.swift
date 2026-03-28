@@ -6491,10 +6491,6 @@ final class GhosttySurfaceScrollView: NSView {
         guard let scrollbar = notification.userInfo?[GhosttyNotificationKey.scrollbar] as? GhosttyScrollbar else {
             return
         }
-        // ターミナル側がoffset=0（最下部）を報告した場合、自動スクロールを再開する
-        if scrollbar.offset == 0 {
-            isScrolledToBottom = true
-        }
         surfaceView.scrollbar = scrollbar
         synchronizeScrollView()
     }
