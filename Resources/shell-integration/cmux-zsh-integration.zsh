@@ -124,6 +124,7 @@ _cmux_ports_kick() {
 }
 
 _cmux_report_git_branch_for_path() {
+    [[ "${CMUX_DISABLE_GIT:-}" == "1" ]] && return 0
     local repo_path="$1"
     [[ -n "$repo_path" ]] || return 0
     [[ -S "$CMUX_SOCKET_PATH" ]] || return 0
@@ -133,8 +134,10 @@ _cmux_report_git_branch_for_path() {
     local branch dirty_opt="" first
     branch="$(git -C "$repo_path" branch --show-current 2>/dev/null)"
     if [[ -n "$branch" ]]; then
-        first="$(git -C "$repo_path" status --porcelain -uno 2>/dev/null | head -1)"
-        [[ -n "$first" ]] && dirty_opt="--status=dirty"
+        # git diff-index はインデックスロックを取らないため、index.lock 競合を回避
+        if ! git -C "$repo_path" diff-index --quiet HEAD -- 2>/dev/null; then
+            dirty_opt="--status=dirty"
+        fi
         _cmux_send "report_git_branch $branch $dirty_opt --tab=$CMUX_TAB_ID --panel=$CMUX_PANEL_ID"
     else
         _cmux_send "clear_git_branch --tab=$CMUX_TAB_ID --panel=$CMUX_PANEL_ID"
@@ -149,6 +152,7 @@ _cmux_stop_git_head_watch() {
 }
 
 _cmux_start_git_head_watch() {
+    [[ "${CMUX_DISABLE_GIT:-}" == "1" ]] && return 0
     [[ -S "$CMUX_SOCKET_PATH" ]] || return 0
     [[ -n "$CMUX_TAB_ID" ]] || return 0
     [[ -n "$CMUX_PANEL_ID" ]] || return 0
@@ -200,6 +204,12 @@ _cmux_preexec() {
             _CMUX_PR_FORCE=1 ;;
     esac
 
+    # Claude Code がフォアグラウンドで起動されたことを記録する。
+    # kill 等で stop フックが呼ばれなくても precmd でステータスをクリアできるようにする。
+    case "$cmd" in
+        claude|claude\ *) _CMUX_CLAUDE_CODE_ACTIVE=1 ;;
+    esac
+
     # Register TTY + kick batched port scan for foreground commands (servers).
     _cmux_report_tty_once
     _cmux_ports_kick
@@ -213,6 +223,15 @@ _cmux_precmd() {
     [[ -S "$CMUX_SOCKET_PATH" ]] || return 0
     [[ -n "$CMUX_TAB_ID" ]] || return 0
     [[ -n "$CMUX_PANEL_ID" ]] || return 0
+
+    # Claude Code のフォアグラウンドプロセスが終了してプロンプトに戻った場合、
+    # サイドバーの "Running" ステータスをクリアする（kill 時に stop フックが呼ばれない対策）。
+    if (( ${_CMUX_CLAUDE_CODE_ACTIVE:-0} )); then
+        _CMUX_CLAUDE_CODE_ACTIVE=0
+        {
+            _cmux_send "clear_status claude_code --tab=$CMUX_TAB_ID"
+        } >/dev/null 2>&1 &!
+    fi
 
     if [[ -z "$_CMUX_TTY_NAME" ]]; then
         local t
@@ -266,6 +285,19 @@ _cmux_precmd() {
     # Git branch/dirty: update immediately on directory change, otherwise every ~3s.
     # While a foreground command is running, _cmux_start_git_head_watch probes HEAD
     # once per second so agent-initiated git checkouts still surface quickly.
+    # CMUX_DISABLE_GIT=1 で git/PR プローブを完全にスキップ
+    if [[ "${CMUX_DISABLE_GIT:-}" == "1" ]]; then
+        # ポートスキャンのみ実行してリターン
+        local cmd_dur=0
+        if [[ -n "$cmd_start" && "$cmd_start" != 0 ]]; then
+            cmd_dur=$(( now - cmd_start ))
+        fi
+        if (( now - _CMUX_PORTS_LAST_RUN >= 10 )) || (( cmd_dur >= 2 )); then
+            _cmux_ports_kick
+        fi
+        return 0
+    fi
+
     local should_git=0
 
     # Git branch can change without a `git ...`-prefixed command (aliases like `gco`,

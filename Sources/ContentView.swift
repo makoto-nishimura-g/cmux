@@ -7922,6 +7922,9 @@ private struct TabItemView: View {
     @Binding var dropIndicator: SidebarDropIndicator?
     @State private var isHovering = false
     @State private var rowHeight: CGFloat = 1
+    @State private var isEditingTitle = false
+    @State private var editingTitleText = ""
+    @FocusState private var isTitleFieldFocused: Bool
     @AppStorage(ShortcutHintDebugSettings.sidebarHintXKey) private var sidebarShortcutHintXOffset = ShortcutHintDebugSettings.defaultSidebarHintX
     @AppStorage(ShortcutHintDebugSettings.sidebarHintYKey) private var sidebarShortcutHintYOffset = ShortcutHintDebugSettings.defaultSidebarHintY
     @AppStorage(ShortcutHintDebugSettings.alwaysShowHintsKey) private var alwaysShowShortcutHints = ShortcutHintDebugSettings.defaultAlwaysShowHints
@@ -8102,11 +8105,29 @@ private struct TabItemView: View {
                         .foregroundColor(activeSecondaryColor(0.8))
                 }
 
-                Text(tab.title)
+                if isEditingTitle {
+                    TextField(
+                        String(localized: "alert.renameWorkspace.placeholder", defaultValue: "Workspace name"),
+                        text: $editingTitleText,
+                        onCommit: { commitTitleEdit() }
+                    )
                     .font(.system(size: 12.5, weight: titleFontWeight))
-                    .foregroundColor(activePrimaryTextColor)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    .textFieldStyle(.plain)
+                    .focused($isTitleFieldFocused)
+                    .onExitCommand { cancelTitleEdit() }
+                    .onChange(of: isTitleFieldFocused) { focused in
+                        if !focused && isEditingTitle {
+                            commitTitleEdit()
+                        }
+                    }
+                } else {
+                    Text(tab.title)
+                        .font(.system(size: 12.5, weight: titleFontWeight))
+                        .foregroundColor(activePrimaryTextColor)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .onTapGesture(count: 2) { beginTitleEdit() }
+                }
 
                 Spacer()
 
@@ -9114,24 +9135,26 @@ private struct TabItemView: View {
     }
 
     private func promptRename() {
-        let alert = NSAlert()
-        alert.messageText = String(localized: "alert.renameWorkspace.title", defaultValue: "Rename Workspace")
-        alert.informativeText = String(localized: "alert.renameWorkspace.message", defaultValue: "Enter a custom name for this workspace.")
-        let input = NSTextField(string: tab.customTitle ?? tab.title)
-        input.placeholderString = String(localized: "alert.renameWorkspace.placeholder", defaultValue: "Workspace name")
-        input.frame = NSRect(x: 0, y: 0, width: 240, height: 22)
-        alert.accessoryView = input
-        alert.addButton(withTitle: String(localized: "alert.renameWorkspace.rename", defaultValue: "Rename"))
-        alert.addButton(withTitle: String(localized: "alert.renameWorkspace.cancel", defaultValue: "Cancel"))
-        let alertWindow = alert.window
-        alertWindow.initialFirstResponder = input
+        beginTitleEdit()
+    }
+
+    private func beginTitleEdit() {
+        editingTitleText = tab.customTitle ?? tab.title
+        isEditingTitle = true
+        // @FocusStateは次のレンダリングサイクルで適用する
         DispatchQueue.main.async {
-            alertWindow.makeFirstResponder(input)
-            input.selectText(nil)
+            isTitleFieldFocused = true
         }
-        let response = alert.runModal()
-        guard response == .alertFirstButtonReturn else { return }
-        tabManager.setCustomTitle(tabId: tab.id, title: input.stringValue)
+    }
+
+    private func commitTitleEdit() {
+        let trimmed = editingTitleText.trimmingCharacters(in: .whitespacesAndNewlines)
+        tabManager.setCustomTitle(tabId: tab.id, title: trimmed.isEmpty ? nil : trimmed)
+        isEditingTitle = false
+    }
+
+    private func cancelTitleEdit() {
+        isEditingTitle = false
     }
 }
 

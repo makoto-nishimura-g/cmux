@@ -2192,6 +2192,28 @@ final class TerminalSurface: Identifiable, ObservableObject {
         }
     }
 
+    /// グレースフルシャットダウン用: 同期的にサーフェスを解放しSIGHUPを送信する。
+    /// applicationShouldTerminate のコンテキストでのみ使用すること。
+    @MainActor
+    func teardownSurfaceSync() {
+        markPortalLifecycleClosed(reason: "gracefulQuit")
+
+        let callbackContext = surfaceCallbackContext
+        surfaceCallbackContext = nil
+
+        let surfaceToFree = surface
+        surface = nil
+
+        guard let surfaceToFree else {
+            callbackContext?.release()
+            return
+        }
+
+        // 同期的に free を呼び出す (IOスレッド join + PTYクローズ → SIGHUP送信)
+        ghostty_surface_free(surfaceToFree)
+        callbackContext?.release()
+    }
+
     #if DEBUG
     private static let surfaceLogPath = "/tmp/cmux-ghostty-surface.log"
     private static let sizeLogPath = "/tmp/cmux-ghostty-size.log"
@@ -4885,6 +4907,8 @@ final class GhosttySurfaceScrollView: NSView {
     private var observers: [NSObjectProtocol] = []
 	    private var windowObservers: [NSObjectProtocol] = []
 	    private var isLiveScrolling = false
+    /// ユーザーが最下部にスクロールしているかどうか。trueの場合のみ表示更新時に自動スクロールする。
+    private var isScrolledToBottom = true
     private var lastSentRow: Int?
     private var isActive = true
     private var activeDropZone: DropZone?
@@ -5166,7 +5190,9 @@ final class GhosttySurfaceScrollView: NSView {
             object: scrollView,
             queue: .main
         ) { [weak self] _ in
-            self?.isLiveScrolling = false
+            guard let self else { return }
+            self.isLiveScrolling = false
+            self.isScrolledToBottom = self.checkIsAtBottom()
         })
 
         observers.append(NotificationCenter.default.addObserver(
@@ -6427,7 +6453,7 @@ final class GhosttySurfaceScrollView: NSView {
     private func synchronizeScrollView() {
         documentView.frame.size.height = documentHeight()
 
-        if !isLiveScrolling {
+        if !isLiveScrolling && isScrolledToBottom {
             let cellHeight = surfaceView.cellSize.height
             if cellHeight > 0, let scrollbar = surfaceView.scrollbar {
                 let offsetY =
@@ -6453,6 +6479,9 @@ final class GhosttySurfaceScrollView: NSView {
         let scrollOffset = documentHeight - visibleRect.origin.y - visibleRect.height
         let row = Int(scrollOffset / cellHeight)
 
+        // スクロール中にリアルタイムで最下部判定を更新
+        isScrolledToBottom = checkIsAtBottom()
+
         guard row != lastSentRow else { return }
         lastSentRow = row
         _ = surfaceView.performBindingAction("scroll_to_row:\(row)")
@@ -6464,6 +6493,17 @@ final class GhosttySurfaceScrollView: NSView {
         }
         surfaceView.scrollbar = scrollbar
         synchronizeScrollView()
+    }
+
+    /// 現在のスクロール位置が最下部にあるかどうかを判定する
+    private func checkIsAtBottom() -> Bool {
+        let visibleRect = scrollView.contentView.documentVisibleRect
+        let docHeight = documentView.frame.height
+        let bottomEdge = visibleRect.origin.y + visibleRect.height
+        let cellHeight = surfaceView.cellSize.height
+        // 1セル分の誤差を許容
+        let tolerance = max(cellHeight, 1.0)
+        return bottomEdge >= docHeight - tolerance
     }
 
     private func documentHeight() -> CGFloat {

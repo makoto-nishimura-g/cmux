@@ -1548,6 +1548,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var didPrepareStartupSessionSnapshot = false
     private var didAttemptStartupSessionRestore = false
     private var isApplyingStartupSessionRestore = false
+    /// 全ウィンドウが閉じられた後、次のウィンドウ登録時にフォールバックジオメトリを復元するためのフラグ
+    private var shouldRestoreFallbackGeometryOnNextWindow = false
     private var sessionAutosaveTimer: DispatchSourceTimer?
     private var socketListenerHealthTimer: DispatchSourceTimer?
     private var socketListenerHealthCheckInFlight = false
@@ -1568,7 +1570,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var lastSessionAutosaveFingerprint: Int?
     private var lastSessionAutosavePersistedAt: Date = .distantPast
     private var didHandleExplicitOpenIntentAtStartup = false
-    private var isTerminatingApp = false
+    private(set) var isTerminatingApp = false
     private var didInstallLifecycleSnapshotObservers = false
     private var didDisableSuddenTermination = false
     private var commandPaletteVisibilityByWindowId: [UUID: Bool] = [:]
@@ -1825,12 +1827,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         isTerminatingApp = true
         _ = saveSessionSnapshot(includeScrollback: true, removeWhenEmpty: false)
-        return .terminateNow
+
+        // 全ウィンドウの全ターミナルサーフェスを収集
+        var surfaces: [TerminalSurface] = []
+        for context in mainWindowContexts.values {
+            for workspace in context.tabManager.tabs {
+                for (_, panel) in workspace.panels {
+                    if let terminal = panel as? TerminalPanel {
+                        surfaces.append(terminal.surface)
+                    }
+                }
+            }
+        }
+
+        // ターミナルがなければ即座に終了
+        guard !surfaces.isEmpty else { return .terminateNow }
+
+        // 同期的に全サーフェスをteardown (SIGHUP送信)
+        for surface in surfaces {
+            surface.teardownSurfaceSync()
+        }
+
+        // 子プロセスにクリーンアップ猶予を与えてから終了通知
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        isTerminatingApp = true
-        _ = saveSessionSnapshot(includeScrollback: true, removeWhenEmpty: false)
+        // セッションスナップショットは applicationShouldTerminate で保存済み
         stopSessionAutosaveTimer()
         stopSocketListenerHealthMonitor()
         TerminalController.shared.stop()
@@ -2883,6 +2909,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         attemptStartupSessionRestoreIfNeeded(primaryWindow: window)
+
+        // ウィンドウ閉じ後の再オープン時にフォールバックジオメトリを復元
+        if shouldRestoreFallbackGeometryOnNextWindow {
+            shouldRestoreFallbackGeometryOnNextWindow = false
+            let displays = currentDisplayGeometries()
+            let fallback = persistedWindowGeometry()
+            if let restoredFrame = Self.resolvedWindowFrame(
+                from: fallback?.frame,
+                display: fallback?.display,
+                availableDisplays: displays.available,
+                fallbackDisplay: displays.fallback
+            ) {
+                window.setFrame(restoredFrame, display: true)
+            }
+        }
+
         if !isTerminatingApp {
             _ = saveSessionSnapshot(includeScrollback: false)
         }
@@ -7748,7 +7790,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let hasEventChars = !(eventCharsIgnoringModifiers?.isEmpty ?? true)
         if hasEventChars,
            flags.contains(.command),
-           !flags.contains(.control),
            shouldRequireCharacterMatchForCommandShortcut(shortcutKey: shortcutKey) {
             return false
         }
@@ -7769,13 +7810,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // so keep ANSI keyCode fallback for control-modified shortcuts. Also allow fallback for
         // command punctuation shortcuts, since some non-US layouts report different characters
         // for the same physical key even when menu-equivalent semantics should still apply.
-        let allowANSIKeyCodeFallback = flags.contains(.control)
-            || (flags.contains(.command)
-                && !flags.contains(.control)
-                && (
-                    !shouldRequireCharacterMatchForCommandShortcut(shortcutKey: shortcutKey)
-                        || (!hasEventChars && (layoutCharacter?.isEmpty ?? true))
-                ))
+        // ただし、ブラケット等の文字マッチ必須キーは、文字情報がある場合はフォールバックしない。
+        // JISキーボードでは [] の物理キー位置がUSと異なり、keyCodeで誤マッチが発生するため。
+        let requireCharMatch = shouldRequireCharacterMatchForCommandShortcut(shortcutKey: shortcutKey)
+        let allowANSIKeyCodeFallback: Bool
+        if requireCharMatch && hasEventChars {
+            allowANSIKeyCodeFallback = false
+        } else {
+            allowANSIKeyCodeFallback = flags.contains(.control)
+                || (flags.contains(.command)
+                    && !flags.contains(.control)
+                    && (
+                        !requireCharMatch
+                            || (!hasEventChars && (layoutCharacter?.isEmpty ?? true))
+                    ))
+        }
         if allowANSIKeyCodeFallback, let expectedKeyCode = keyCodeForShortcutKey(shortcutKey) {
             return event.keyCode == expectedKeyCode
         }
@@ -7786,7 +7835,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard shortcutKey.count == 1, let scalar = shortcutKey.unicodeScalars.first else {
             return false
         }
+        // アルファベットに加えて、ブラケットも文字マッチ必須にする。
+        // JISキーボードでは [] の物理キー位置がUSと異なるため、
+        // ANSI keyCodeフォールバックで誤マッチが発生する。
         return CharacterSet.letters.contains(scalar)
+            || CharacterSet(charactersIn: "[]").contains(scalar)
     }
 
     private func shortcutCharacterMatches(
@@ -8206,6 +8259,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Keep geometry available as a fallback even if the full session snapshot
         // is removed when the last window closes.
         persistWindowGeometry(from: window)
+
+        // 最後のウィンドウを閉じる場合、コンテキスト削除前にスナップショットを保存する。
+        // コンテキスト削除後では buildSessionSnapshot が nil を返してしまい、
+        // removeWhenEmpty=true によりセッションファイルが削除されてしまうため。
+        let isLastWindow = mainWindowContexts.count == 1
+            && mainWindowContexts[ObjectIdentifier(window)] != nil
+        if isLastWindow,
+           !isTerminatingApp,
+           Self.shouldPersistSnapshotOnWindowUnregister(isTerminatingApp: isTerminatingApp) {
+            _ = saveSessionSnapshot(includeScrollback: false)
+        }
+
         guard let removed = unregisterMainWindowContext(for: window) else { return }
         commandPaletteVisibilityByWindowId.removeValue(forKey: removed.windowId)
         commandPalettePendingOpenByWindowId.removeValue(forKey: removed.windowId)
@@ -8248,13 +8313,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // During app termination we already persisted a full snapshot (with scrollback)
         // in applicationShouldTerminate/applicationWillTerminate. Saving again here would
         // overwrite it as windows tear down one-by-one, dropping closed windows and replay.
-        if Self.shouldPersistSnapshotOnWindowUnregister(isTerminatingApp: isTerminatingApp) {
+        // 最後のウィンドウの場合はコンテキスト削除前に既に保存済みなのでスキップする。
+        if !isLastWindow,
+           Self.shouldPersistSnapshotOnWindowUnregister(isTerminatingApp: isTerminatingApp) {
             _ = saveSessionSnapshot(
                 includeScrollback: false,
-                removeWhenEmpty: Self.shouldRemoveSnapshotWhenNoWindowsRemainOnWindowUnregister(
-                    isTerminatingApp: isTerminatingApp
-                )
+                removeWhenEmpty: false
             )
+        }
+
+        // 全ウィンドウが閉じられた場合、次のウィンドウ登録時にフォールバックジオメトリを復元する
+        if mainWindowContexts.isEmpty && !isTerminatingApp {
+            shouldRestoreFallbackGeometryOnNextWindow = true
         }
     }
 

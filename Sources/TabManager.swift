@@ -1454,10 +1454,15 @@ class TabManager: ObservableObject {
         // Cmd+W closes the focused Bonsplit tab (a "tab" in the UI). When the workspace only has
         // a single tab left, closing it should close the workspace (and possibly the window),
         // rather than creating a replacement terminal.
+        // cmuxConfirmCloseSurface が false なら確認スキップ
+        let confirmDisabled = UserDefaults.standard.object(forKey: "cmuxConfirmCloseSurface") != nil
+            && !UserDefaults.standard.bool(forKey: "cmuxConfirmCloseSurface")
+
         let effectiveSurfaceCount = max(tab.panels.count, bonsplitTabCount)
         let isLastTabInWorkspace = effectiveSurfaceCount <= 1
         if isLastTabInWorkspace {
             let willCloseWindow = tabs.count <= 1
+            // ワークスペース閉鎖に繋がるため、confirmDisabled でも確認ダイアログを出す
             let needsConfirm = workspaceNeedsConfirmClose(tab)
             if needsConfirm {
                 let message = willCloseWindow
@@ -1493,7 +1498,8 @@ class TabManager: ObservableObject {
             return
         }
 
-        if let terminalPanel = tab.terminalPanel(for: panelId),
+        if !confirmDisabled,
+           let terminalPanel = tab.terminalPanel(for: panelId),
            terminalPanel.needsConfirmClose() {
 #if DEBUG
             dlog(
@@ -1583,6 +1589,10 @@ class TabManager: ObservableObject {
     /// This should never prompt: the process is already gone, and Ghostty emits the
     /// `SHOW_CHILD_EXITED` action specifically so the host app can decide what to do.
     func closePanelAfterChildExited(tabId: UUID, surfaceId: UUID) {
+        // グレースフルシャットダウン中はパネル自動クローズを抑制
+        // (セッション状態は既に保存済み)
+        if AppDelegate.shared?.isTerminatingApp == true { return }
+
         guard let tab = tabs.first(where: { $0.id == tabId }) else { return }
         guard tab.panels[surfaceId] != nil else { return }
 
